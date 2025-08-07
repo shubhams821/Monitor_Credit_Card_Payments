@@ -1,0 +1,14 @@
+# Database Configuration
+# For SQLite (default)
+DATABASE_URL=sqlite:///./documents.db
+
+# For PostgreSQL (uncomment and configure as needed)
+# DATABASE_URL=postgresql://username:password@localhost:5432/database_name
+
+# API Configuration
+API_HOST=0.0.0.0
+API_PORT=8000
+
+# Vision OCR Configuration (Optional)
+# Get your API key from https://console.groq.com/
+GROQ_API_KEY=your_groq_api_key_here 
