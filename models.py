@@ -1,5 +1,6 @@
-from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, ForeignKey, Numeric
 from sqlalchemy.sql import func
+from sqlalchemy.orm import relationship
 from database import Base
 
 class Document(Base):
@@ -33,5 +34,44 @@ class Document(Base):
     text_processing_completed = Column(Boolean, default=False)
     text_processing_error = Column(Text, nullable=True)
 
+    # Relationship to transaction details
+    transaction_details = relationship("TransactionDetails", back_populates="document")
+
     def __repr__(self):
-        return f"<Document(id={self.id}, user_id='{self.user_id}', statement_id='{self.statement_id}')>" 
+        return f"<Document(id={self.id}, user_id='{self.user_id}', statement_id='{self.statement_id}')>"
+
+
+class TransactionDetails(Base):
+    __tablename__ = "transaction_details"
+
+    id = Column(Integer, primary_key=True, index=True)
+    statement_id = Column(String(255), ForeignKey("documents.statement_id"), nullable=False, index=True)
+    
+    # Transaction information
+    transaction_date = Column(DateTime, nullable=True)
+    description = Column(Text, nullable=True)
+    amount = Column(Numeric(precision=15, scale=2), nullable=True)
+    transaction_type = Column(String(50), nullable=True)  # debit, credit, etc.
+    balance = Column(Numeric(precision=15, scale=2), nullable=True)
+    reference_number = Column(String(255), nullable=True)
+    category = Column(String(100), nullable=True)
+    
+    # Processing metadata
+    extraction_source = Column(String(50), nullable=True)  # poppler or ocr
+    confidence_score = Column(Numeric(precision=5, scale=4), nullable=True)  # 0-1 confidence
+    processed_at = Column(DateTime(timezone=True), server_default=func.now())
+    llm_raw_response = Column(Text, nullable=True)  # Store the original LLM response
+    
+    # Processing status
+    processing_completed = Column(Boolean, default=False)
+    processing_error = Column(Text, nullable=True)
+    
+    # Timestamps
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationship back to document
+    document = relationship("Document", back_populates="transaction_details")
+
+    def __repr__(self):
+        return f"<TransactionDetails(id={self.id}, statement_id='{self.statement_id}', amount={self.amount})>" 

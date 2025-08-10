@@ -8,12 +8,18 @@ import uuid
 from typing import Optional
 import asyncio
 import threading
+import time
+import logging
 
 from database import get_db, engine
-from models import Base, Document
-from schemas import DocumentCreate, DocumentResponse, TextExtractionResponse
+from models import Base, Document, TransactionDetails
+from schemas import (
+    DocumentCreate, DocumentResponse, TextExtractionResponse,
+    TransactionDetailsResponse, TransactionExtractionResponse
+)
 from pdf_text_extractor import extract_text_from_pdf
 from vision_ocr import process_pdf_with_ocr
+from transaction_extractor import TransactionExtractor
 
 # Create database tables
 Base.metadata.create_all(bind=engine)
@@ -21,7 +27,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="Document Upload API",
     description="API for uploading PDF documents with user and statement information",
-    version="1.0.0"
+    version="1.1.0"
 )
 
 # Create uploads directory if it doesn't exist
@@ -71,6 +77,117 @@ def process_document_text_extraction(document_id: int, file_path: str, db: Sessi
             document.text_processing_error = str(e)
             document.text_processing_completed = True
             db.commit()
+
+
+def process_transaction_extraction(statement_id: str, db: Session):
+    """
+    Process transaction extraction for a statement (runs in background)
+    """
+    start_time = time.time()
+    extractor = TransactionExtractor()
+    
+    try:
+        # Get the document by statement_id
+        document = db.query(Document).filter(Document.statement_id == statement_id).first()
+        if not document:
+            logging.error(f"Document not found for statement_id: {statement_id}")
+            return
+        
+        # Determine which text to use for extraction
+        text_to_extract = None
+        extraction_source = None
+        
+        # Prefer OCR text if available and successful, otherwise use Poppler
+        if document.ocr_extraction_success and document.ocr_text:
+            text_to_extract = document.ocr_text
+            extraction_source = "ocr"
+        elif document.poppler_extraction_success and document.poppler_text:
+            text_to_extract = document.poppler_text
+            extraction_source = "poppler"
+        else:
+            logging.warning(f"No extracted text available for statement_id: {statement_id}")
+            return
+        
+        # Extract transactions using LLM
+        extraction_result = extractor.extract_transactions(text_to_extract, statement_id)
+        
+        if extraction_result["success"]:
+            # Save each transaction to database
+            saved_count = 0
+            failed_count = 0
+            
+            for transaction_data in extraction_result["transactions"]:
+                try:
+                    # Set extraction source
+                    transaction_data["extraction_source"] = extraction_source
+                    
+                    # Create transaction record
+                    transaction = TransactionDetails(**transaction_data)
+                    db.add(transaction)
+                    db.commit()
+                    db.refresh(transaction)
+                    saved_count += 1
+                    
+                except Exception as e:
+                    logging.error(f"Failed to save transaction for statement {statement_id}: {e}")
+                    failed_count += 1
+                    db.rollback()
+            
+            processing_time = time.time() - start_time
+            logging.info(f"Transaction extraction completed for statement {statement_id}: "
+                        f"{saved_count} saved, {failed_count} failed, "
+                        f"processing time: {processing_time:.2f}s")
+        
+        else:
+            logging.error(f"Transaction extraction failed for statement {statement_id}: "
+                         f"{extraction_result.get('error', 'Unknown error')}")
+            
+            # Save error record
+            error_transaction = TransactionDetails(
+                statement_id=statement_id,
+                description=f"Transaction extraction failed: {extraction_result.get('error', 'Unknown error')}",
+                extraction_source=extraction_source,
+                processing_completed=False,
+                processing_error=extraction_result.get('error', 'Unknown error'),
+                llm_raw_response=extraction_result.get('raw_response')
+            )
+            db.add(error_transaction)
+            db.commit()
+            
+    except Exception as e:
+        processing_time = time.time() - start_time
+        logging.error(f"Transaction extraction process failed for statement {statement_id}: {e}")
+        
+        # Save error record
+        try:
+            error_transaction = TransactionDetails(
+                statement_id=statement_id,
+                description=f"Transaction extraction process failed: {str(e)}",
+                processing_completed=False,
+                processing_error=str(e)
+            )
+            db.add(error_transaction)
+            db.commit()
+        except Exception as save_error:
+            logging.error(f"Failed to save error record: {save_error}")
+
+
+def enhanced_process_document_text_extraction(document_id: int, file_path: str, db: Session):
+    """
+    Enhanced process that includes both text extraction and transaction extraction
+    """
+    # First run the original text extraction
+    process_document_text_extraction(document_id, file_path, db)
+    
+    # Then trigger transaction extraction
+    document = db.query(Document).filter(Document.id == document_id).first()
+    if document and document.text_processing_completed:
+        # Run transaction extraction in a separate thread to avoid blocking
+        threading.Thread(
+            target=process_transaction_extraction,
+            args=(document.statement_id, db),
+            daemon=True
+        ).start()
 
 @app.get("/")
 async def root():
@@ -122,8 +239,8 @@ async def upload_document(
         db.commit()
         db.refresh(db_document)
         
-        # Add background task for text extraction
-        background_tasks.add_task(process_document_text_extraction, db_document.id, file_path, db)
+        # Add background task for enhanced text extraction (includes transaction extraction)
+        background_tasks.add_task(enhanced_process_document_text_extraction, db_document.id, file_path, db)
         
         return DocumentResponse(
             id=db_document.id,
@@ -320,6 +437,181 @@ async def get_document_text(document_id: int, db: Session = Depends(get_db)):
         "processing_completed": document.text_processing_completed,
         "error": document.text_processing_error
     }
+
+
+# Transaction Details Endpoints
+
+@app.get("/statements/{statement_id}/transactions", response_model=list[TransactionDetailsResponse])
+async def get_transactions_by_statement(statement_id: str, db: Session = Depends(get_db)):
+    """
+    Get all transactions for a specific statement
+    """
+    transactions = db.query(TransactionDetails).filter(
+        TransactionDetails.statement_id == statement_id
+    ).order_by(TransactionDetails.transaction_date.desc()).all()
+    
+    return transactions
+
+
+@app.get("/transactions/{transaction_id}", response_model=TransactionDetailsResponse)
+async def get_transaction(transaction_id: int, db: Session = Depends(get_db)):
+    """
+    Get a specific transaction by ID
+    """
+    transaction = db.query(TransactionDetails).filter(
+        TransactionDetails.id == transaction_id
+    ).first()
+    
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    return transaction
+
+
+@app.post("/statements/{statement_id}/extract-transactions", response_model=TransactionExtractionResponse)
+async def manually_extract_transactions(
+    statement_id: str, 
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db)
+):
+    """
+    Manually trigger transaction extraction for a statement
+    """
+    start_time = time.time()
+    
+    # Check if document exists
+    document = db.query(Document).filter(Document.statement_id == statement_id).first()
+    if not document:
+        raise HTTPException(status_code=404, detail="Statement not found")
+    
+    # Check if text extraction is completed
+    if not document.text_processing_completed:
+        raise HTTPException(
+            status_code=400, 
+            detail="Text extraction not completed. Please wait for text processing to finish."
+        )
+    
+    try:
+        # Run transaction extraction in background
+        background_tasks.add_task(process_transaction_extraction, statement_id, db)
+        
+        # Return existing transactions if any
+        existing_transactions = db.query(TransactionDetails).filter(
+            TransactionDetails.statement_id == statement_id
+        ).all()
+        
+        processing_time = time.time() - start_time
+        
+        return TransactionExtractionResponse(
+            document_id=document.id,
+            statement_id=statement_id,
+            total_transactions=len(existing_transactions),
+            successful_extractions=len([t for t in existing_transactions if t.processing_completed]),
+            failed_extractions=len([t for t in existing_transactions if not t.processing_completed]),
+            processing_time_seconds=processing_time,
+            message="Transaction extraction started in background. Existing transactions returned.",
+            transactions=existing_transactions
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to start transaction extraction: {str(e)}")
+
+
+@app.delete("/transactions/{transaction_id}")
+async def delete_transaction(transaction_id: int, db: Session = Depends(get_db)):
+    """
+    Delete a specific transaction
+    """
+    transaction = db.query(TransactionDetails).filter(
+        TransactionDetails.id == transaction_id
+    ).first()
+    
+    if not transaction:
+        raise HTTPException(status_code=404, detail="Transaction not found")
+    
+    try:
+        db.delete(transaction)
+        db.commit()
+        return {"message": "Transaction deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete transaction: {str(e)}")
+
+
+@app.delete("/statements/{statement_id}/transactions")
+async def delete_all_transactions(statement_id: str, db: Session = Depends(get_db)):
+    """
+    Delete all transactions for a statement
+    """
+    try:
+        deleted_count = db.query(TransactionDetails).filter(
+            TransactionDetails.statement_id == statement_id
+        ).delete()
+        
+        db.commit()
+        
+        return {
+            "message": f"Successfully deleted {deleted_count} transactions for statement {statement_id}",
+            "deleted_count": deleted_count
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete transactions: {str(e)}")
+
+
+@app.get("/statements/{statement_id}/transactions/summary")
+async def get_transaction_summary(statement_id: str, db: Session = Depends(get_db)):
+    """
+    Get transaction summary for a statement
+    """
+    transactions = db.query(TransactionDetails).filter(
+        TransactionDetails.statement_id == statement_id,
+        TransactionDetails.processing_completed == True
+    ).all()
+    
+    if not transactions:
+        return {
+            "statement_id": statement_id,
+            "total_transactions": 0,
+            "total_credits": 0,
+            "total_debits": 0,
+            "net_amount": 0,
+            "categories": {},
+            "date_range": None
+        }
+    
+    # Calculate summary statistics
+    total_credits = sum(t.amount for t in transactions if t.amount and t.amount > 0)
+    total_debits = sum(abs(t.amount) for t in transactions if t.amount and t.amount < 0)
+    net_amount = total_credits - total_debits
+    
+    # Category breakdown
+    categories = {}
+    for transaction in transactions:
+        if transaction.category:
+            if transaction.category not in categories:
+                categories[transaction.category] = {"count": 0, "amount": 0}
+            categories[transaction.category]["count"] += 1
+            if transaction.amount:
+                categories[transaction.category]["amount"] += float(transaction.amount)
+    
+    # Date range
+    valid_dates = [t.transaction_date for t in transactions if t.transaction_date]
+    date_range = None
+    if valid_dates:
+        date_range = {
+            "earliest": min(valid_dates),
+            "latest": max(valid_dates)
+        }
+    
+    return {
+        "statement_id": statement_id,
+        "total_transactions": len(transactions),
+        "total_credits": float(total_credits),
+        "total_debits": float(total_debits),
+        "net_amount": float(net_amount),
+        "categories": categories,
+        "date_range": date_range
+    }
+
 
 if __name__ == "__main__":
     import uvicorn

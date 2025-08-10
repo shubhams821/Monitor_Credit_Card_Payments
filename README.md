@@ -12,6 +12,10 @@ A FastAPI-based Python API for uploading PDF documents with user ID and statemen
 - **OCR processing using Vision models (Groq API)**
 - **Background text processing during upload**
 - **Text extraction comparison and analysis**
+- **🆕 AI-powered transaction extraction using Llama 3 (Groq)**
+- **🆕 Automatic transaction details parsing from statements**
+- **🆕 Transaction categorization and analysis**
+- **🆕 Comprehensive transaction management API**
 - RESTful API endpoints
 - Automatic file management
 - Comprehensive error handling
@@ -122,6 +126,40 @@ The API will be available at:
 - **GET** `/documents/{document_id}/text`
 - Get extracted text from both Poppler and OCR methods
 
+## 🆕 Transaction Management Endpoints
+
+### Get Transactions by Statement
+- **GET** `/statements/{statement_id}/transactions`
+- Retrieve all transactions for a specific statement
+- Returns detailed transaction information including dates, amounts, categories
+
+### Get Transaction by ID
+- **GET** `/transactions/{transaction_id}`
+- Retrieve a specific transaction by its ID
+
+### Extract Transactions (Manual)
+- **POST** `/statements/{statement_id}/extract-transactions`
+- Manually trigger AI-powered transaction extraction for a statement
+- Uses Llama 3 model via Groq API to parse transaction details
+- Runs in background and returns existing transactions immediately
+
+### Delete Transaction
+- **DELETE** `/transactions/{transaction_id}`
+- Delete a specific transaction by its ID
+
+### Delete All Transactions
+- **DELETE** `/statements/{statement_id}/transactions`
+- Delete all transactions for a specific statement
+
+### Get Transaction Summary
+- **GET** `/statements/{statement_id}/transactions/summary`
+- Get comprehensive summary including:
+  - Total transactions count
+  - Total credits and debits
+  - Net amount
+  - Category breakdown
+  - Date range
+
 ## Usage Examples
 
 ### Upload a document using curl:
@@ -164,19 +202,57 @@ curl -X POST "http://localhost:8000/documents/1/extract-text"
 curl "http://localhost:8000/documents/1/text"
 ```
 
+## 🆕 Transaction Extraction Examples
+
+### Get all transactions for a statement:
+```bash
+curl "http://localhost:8000/statements/stmt456/transactions"
+```
+
+### Manually trigger transaction extraction:
+```bash
+curl -X POST "http://localhost:8000/statements/stmt456/extract-transactions"
+```
+
+### Get transaction summary:
+```bash
+curl "http://localhost:8000/statements/stmt456/transactions/summary"
+```
+
+### Python example for transaction analysis:
+```python
+import requests
+
+# Get transactions for analysis
+response = requests.get("http://localhost:8000/statements/stmt456/transactions")
+transactions = response.json()
+
+# Get summary statistics
+response = requests.get("http://localhost:8000/statements/stmt456/transactions/summary")
+summary = response.json()
+
+print(f"Total transactions: {summary['total_transactions']}")
+print(f"Net amount: ${summary['net_amount']:.2f}")
+print(f"Categories: {list(summary['categories'].keys())}")
+```
+
 ## Project Structure
 
 ```
 MonitorCredit/
-├── main.py              # FastAPI application
-├── database.py          # Database configuration
-├── models.py            # SQLAlchemy models
-├── schemas.py           # Pydantic schemas
-├── requirements.txt     # Python dependencies
-├── env_example.txt      # Environment variables example
-├── README.md           # This file
-├── uploads/            # Directory for uploaded files (created automatically)
-└── documents.db        # SQLite database (created automatically)
+├── main.py                  # FastAPI application
+├── database.py              # Database configuration
+├── models.py                # SQLAlchemy models (Document, TransactionDetails)
+├── schemas.py               # Pydantic schemas
+├── transaction_extractor.py # 🆕 AI transaction extraction service
+├── pdf_text_extractor.py    # Poppler-based text extraction
+├── vision_ocr.py           # OCR text extraction
+├── requirements.txt         # Python dependencies
+├── env_example.txt          # Environment variables example
+├── test_transaction_api.py  # 🆕 Transaction API test script
+├── README.md               # This file
+├── uploads/                # Directory for uploaded files (created automatically)
+└── documents.db            # SQLite database (created automatically)
 ```
 
 ## Database Schema
@@ -205,6 +281,27 @@ The `documents` table contains:
 - `ocr_confidence`: OCR confidence score (0-100)
 - `text_processing_completed`: Whether text processing is complete
 - `text_processing_error`: Error message if processing failed
+
+## 🆕 Transaction Details Table Schema
+
+The `transaction_details` table contains:
+- `id`: Primary key
+- `statement_id`: Foreign key linking to documents table
+- `transaction_date`: Date of the transaction
+- `description`: Transaction description/merchant name
+- `amount`: Transaction amount (negative for debits, positive for credits)
+- `transaction_type`: Type (debit, credit, withdrawal, deposit, etc.)
+- `balance`: Account balance after transaction
+- `reference_number`: Check number or reference ID
+- `category`: Auto-categorized transaction type (food, gas, shopping, etc.)
+- `extraction_source`: Source of extraction (poppler, ocr, llm)
+- `confidence_score`: AI confidence in extraction accuracy (0-1)
+- `processed_at`: When the transaction was processed
+- `llm_raw_response`: Raw response from the AI model
+- `processing_completed`: Whether processing succeeded
+- `processing_error`: Error message if processing failed
+- `created_at`: Record creation timestamp
+- `updated_at`: Record update timestamp
 
 ## Error Handling
 

@@ -348,7 +348,7 @@ def process_pdf_with_ocr(pdf_path: str, dpi: int = 300,
     Returns:
         Dictionary containing OCR results
     """
-    ocr = VisionOCR()
+    ocr = VisionOCR(api_key=api_key)
     return ocr.process_pdf_with_ocr(pdf_path, dpi, system_prompt)
 
 def compare_extraction_methods(pdf_path: str) -> Dict[str, Any]:

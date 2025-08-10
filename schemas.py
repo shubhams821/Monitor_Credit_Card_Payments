@@ -1,6 +1,7 @@
 from pydantic import BaseModel
 from datetime import datetime
-from typing import Optional
+from typing import Optional, List
+from decimal import Decimal
 
 class DocumentBase(BaseModel):
     user_id: str
@@ -51,4 +52,61 @@ class TextExtractionResponse(BaseModel):
     ocr_pages: int
     ocr_confidence: float
     similarity_score: Optional[float] = None
-    message: str 
+    message: str
+
+
+# Transaction Details Schemas
+class TransactionDetailsBase(BaseModel):
+    statement_id: str
+    transaction_date: Optional[datetime] = None
+    description: Optional[str] = None
+    amount: Optional[Decimal] = None
+    transaction_type: Optional[str] = None
+    balance: Optional[Decimal] = None
+    reference_number: Optional[str] = None
+    category: Optional[str] = None
+    extraction_source: Optional[str] = None
+    confidence_score: Optional[Decimal] = None
+
+class TransactionDetailsCreate(TransactionDetailsBase):
+    pass
+
+class TransactionDetailsResponse(BaseModel):
+    id: int
+    statement_id: str
+    transaction_date: Optional[datetime] = None
+    description: Optional[str] = None
+    amount: Optional[Decimal] = None
+    transaction_type: Optional[str] = None
+    balance: Optional[Decimal] = None
+    reference_number: Optional[str] = None
+    category: Optional[str] = None
+    extraction_source: Optional[str] = None
+    confidence_score: Optional[Decimal] = None
+    processed_at: datetime
+    processing_completed: bool
+    processing_error: Optional[str] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class TransactionDetailsUpdate(BaseModel):
+    transaction_date: Optional[datetime] = None
+    description: Optional[str] = None
+    amount: Optional[Decimal] = None
+    transaction_type: Optional[str] = None
+    balance: Optional[Decimal] = None
+    reference_number: Optional[str] = None
+    category: Optional[str] = None
+
+class TransactionExtractionResponse(BaseModel):
+    document_id: int
+    statement_id: str
+    total_transactions: int
+    successful_extractions: int
+    failed_extractions: int
+    processing_time_seconds: float
+    message: str
+    transactions: List[TransactionDetailsResponse] 
