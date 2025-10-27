@@ -1,5 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException, Depends, BackgroundTasks
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
 import aiofiles
 import os
@@ -28,6 +29,15 @@ app = FastAPI(
     title="Document Upload API",
     description="API for uploading PDF documents with user and statement information",
     version="1.1.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
 )
 
 # Create uploads directory if it doesn't exist
@@ -98,12 +108,14 @@ def process_transaction_extraction(statement_id: str, db: Session):
         extraction_source = None
         
         # Prefer OCR text if available and successful, otherwise use Poppler
-        if document.ocr_extraction_success and document.ocr_text:
-            text_to_extract = document.ocr_text
-            extraction_source = "ocr"
-        elif document.poppler_extraction_success and document.poppler_text:
+        
+        if document.poppler_extraction_success and document.poppler_text:
             text_to_extract = document.poppler_text
             extraction_source = "poppler"
+            
+        elif document.ocr_extraction_success and document.ocr_text:
+            text_to_extract = document.ocr_text
+            extraction_source = "ocr"
         else:
             logging.warning(f"No extracted text available for statement_id: {statement_id}")
             return

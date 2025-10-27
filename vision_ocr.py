@@ -15,6 +15,7 @@ api_key=os.getenv("GROQ_API_KEY")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 # Import the LLM client (you'll need to configure this)
+
 try:
     from groq import Groq
     client = Groq(api_key=api_key)

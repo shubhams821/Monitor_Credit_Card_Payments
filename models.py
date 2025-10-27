@@ -35,7 +35,12 @@ class Document(Base):
     text_processing_error = Column(Text, nullable=True)
 
     # Relationship to transaction details
-    transaction_details = relationship("TransactionDetails", back_populates="document")
+    transaction_details = relationship(
+        "TransactionDetails",
+        back_populates="document",
+        cascade="all, delete-orphan",
+        passive_deletes=True
+    )
 
     def __repr__(self):
         return f"<Document(id={self.id}, user_id='{self.user_id}', statement_id='{self.statement_id}')>"
@@ -45,7 +50,7 @@ class TransactionDetails(Base):
     __tablename__ = "transaction_details"
 
     id = Column(Integer, primary_key=True, index=True)
-    statement_id = Column(String(255), ForeignKey("documents.statement_id"), nullable=False, index=True)
+    statement_id = Column(String(255), ForeignKey("documents.statement_id", ondelete="CASCADE"), nullable=False, index=True)
     
     # Transaction information
     transaction_date = Column(DateTime, nullable=True)
@@ -72,6 +77,7 @@ class TransactionDetails(Base):
     
     # Relationship back to document
     document = relationship("Document", back_populates="transaction_details")
+    # statement = relationship("Statement", back_populates="transactions")
 
     def __repr__(self):
         return f"<TransactionDetails(id={self.id}, statement_id='{self.statement_id}', amount={self.amount})>" 

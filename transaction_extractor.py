@@ -68,7 +68,7 @@ class TransactionExtractor:
             
             # Parse the response
             raw_response = response.choices[0].message.content
-            logger.info(f"Raw LLM response for statement {statement_id}: {raw_response[:500]}...")
+            logger.info(f"Raw LLM response for statement {statement_id}: {raw_response[:]}...")
             
             # Parse JSON response
             extracted_data = json.loads(raw_response)
@@ -126,6 +126,9 @@ IMPORTANT FORMATTING RULES:
 4. Format amounts as numbers (use negative for debits/withdrawals)
 5. Keep descriptions concise but complete
 6. Assign reasonable categories based on merchant names
+7. do not repeat the same transaction in the response.
+8. CR after end of the transaction, means credited.
+9. HSBC bank statement follows different rule for EMI transactions, they first credit the same amount and then debit it. so show only one transaction  for that EMI.
 
 Response format:
 {
@@ -189,6 +192,7 @@ Extract each transaction with all available details and return as JSON following
                 }
                 
                 processed.append(processed_transaction)
+                logger.info(f"{processed_transaction}")
                 
             except Exception as e:
                 logger.warning(f"Failed to process transaction {i} for statement {statement_id}: {e}")
