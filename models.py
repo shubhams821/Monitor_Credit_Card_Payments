@@ -2,12 +2,33 @@ from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, Foreign
 from sqlalchemy.sql import func
 from sqlalchemy.orm import relationship
 from database import Base
+from datetime import datetime
+
+
+
+class User(Base):
+    """User account model for authentication"""
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), unique=True, index=True, nullable=False)
+    hashed_password = Column(String(255), nullable=False)
+    full_name = Column(String(255), nullable=True)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationship to documents
+    documents = relationship("Document", back_populates="user", cascade="all, delete-orphan")
+
+
+
 
 class Document(Base):
     __tablename__ = "documents"
 
     id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String(255), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     statement_id = Column(String(255), nullable=False, index=True)
     original_filename = Column(String(255), nullable=False)
     stored_filename = Column(String(255), nullable=False)
@@ -33,6 +54,9 @@ class Document(Base):
     # Processing status
     text_processing_completed = Column(Boolean, default=False)
     text_processing_error = Column(Text, nullable=True)
+
+    # Relationship to user
+    user = relationship("User", back_populates="documents")
 
     # Relationship to transaction details
     transaction_details = relationship(

@@ -4,8 +4,161 @@ const API_BASE_URL = 'http://localhost:8000';
 // Global state
 let documents = [];
 let currentDocument = null;
+let authToken = null;
+let currentUser = null;
 
-// Utility functions
+// ========== AUTHENTICATION FUNCTIONS ==========
+
+function saveAuthToken(token) {
+    authToken = token;
+    localStorage.setItem('authToken', token);
+}
+
+function getAuthToken() {
+    if (!authToken) {
+        authToken = localStorage.getItem('authToken');
+    }
+    return authToken;
+}
+
+function clearAuthToken() {
+    authToken = null;
+    localStorage.removeItem('authToken');
+}
+
+function isAuthenticated() {
+    return !!getAuthToken();
+}
+
+async function handleRegister(event) {
+    event.preventDefault();
+    
+    const name = document.getElementById('registerName').value;
+    const email = document.getElementById('registerEmail').value;
+    const password = document.getElementById('registerPassword').value;
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/register`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                full_name: name,
+                email: email,
+                password: password
+            })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || 'Registration failed');
+        }
+        
+        const userData = await response.json();
+        showNotification('Registration successful! Please login.', 'success');
+        showLoginForm();
+        
+        // Pre-fill login email
+        document.getElementById('loginEmail').value = email;
+        
+    } catch (error) {
+        showNotification(`Registration failed: ${error.message}`, 'error');
+    }
+}
+
+async function handleLogin(event) {
+    event.preventDefault();
+    
+    const email = document.getElementById('loginEmail').value;
+    const password = document.getElementById('loginPassword').value;
+    
+    try {
+        const form = new URLSearchParams();
+        form.append("username", email);
+        form.append("password", password);
+
+        const response = await fetch(`${API_BASE_URL}/login`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: form
+        });
+
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail);
+        }
+
+        const data = await response.json();
+        saveAuthToken(data.access_token);
+
+        await fetchCurrentUser();
+
+        document.getElementById('loginScreen').classList.add('hidden');
+        document.getElementById('app').classList.remove('hidden');
+
+        showNotification('Login successful!', 'success');
+        loadDocuments();
+        
+    } catch (error) {
+        showNotification(`Login failed: ${error.message}`, 'error');
+    }
+}
+
+
+async function fetchCurrentUser() {
+    try {
+        currentUser = await apiCall('/me');
+        document.getElementById('userEmail').textContent = currentUser.email;
+    } catch (error) {
+        console.error('Failed to fetch user:', error);
+    }
+}
+
+function handleLogout() {
+    clearAuthToken();
+    currentUser = null;
+    documents = [];
+    
+    // Hide app, show login
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('loginScreen').classList.remove('hidden');
+    
+    // Reset forms
+    document.getElementById('loginForm').querySelector('form').reset();
+    document.getElementById('registerForm').querySelector('form').reset();
+    
+    showNotification('Logged out successfully', 'info');
+}
+
+function showLoginForm() {
+    document.getElementById('registerForm').classList.add('hidden');
+    document.getElementById('loginForm').classList.remove('hidden');
+}
+
+function showRegisterForm() {
+    document.getElementById('loginForm').classList.add('hidden');
+    document.getElementById('registerForm').classList.remove('hidden');
+}
+
+// Check authentication on page load
+function checkAuthOnLoad() {
+    if (isAuthenticated()) {
+        fetchCurrentUser().then(() => {
+            document.getElementById('loginScreen').classList.add('hidden');
+            document.getElementById('app').classList.remove('hidden');
+            loadDocuments();
+        }).catch(() => {
+            // Token invalid, clear it
+            clearAuthToken();
+        });
+    }
+}
+
+// ========== UTILITY FUNCTIONS ==========
+
 function showNotification(message, type = 'info') {
     const colors = {
         success: 'bg-green-500',
@@ -58,16 +211,43 @@ function getStatusBadge(status, processingCompleted) {
     }
 }
 
-// API Functions
+// ========== API FUNCTIONS WITH AUTH ==========
+
 async function apiCall(endpoint, options = {}) {
     try {
+        const token = getAuthToken();
+        
+        if (!token && !endpoint.includes('/login') && !endpoint.includes('/register')) {
+            throw new Error('Not authenticated');
+        }
+        
+        const headers = {
+            ...options.headers
+        };
+        
+        // Add auth token if available
+        if (token) {
+            headers['Authorization'] = `Bearer ${token}`;
+        }
+        
+        // Add Content-Type for JSON requests
+        if (options.body && typeof options.body === 'string') {
+            headers['Content-Type'] = 'application/json';
+        }
+        
         const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-            headers: {
-                'Content-Type': 'application/json',
-                ...options.headers
-            },
-            ...options
+            ...options,
+            headers
         });
+        
+        // Handle 401 - token expired or invalid
+        if (response.status === 401) {
+            clearAuthToken();
+            document.getElementById('app').classList.add('hidden');
+            document.getElementById('loginScreen').classList.remove('hidden');
+            showNotification('Session expired. Please login again.', 'warning');
+            throw new Error('Authentication expired');
+        }
         
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
@@ -83,12 +263,10 @@ async function apiCall(endpoint, options = {}) {
 
 async function loadDocuments() {
     try {
-        const userId = document.getElementById('userIdFilter').value;
         const statementId = document.getElementById('statementIdFilter').value;
         
         let url = '/documents/';
         const params = new URLSearchParams();
-        if (userId) params.append('user_id', userId);
         if (statementId) params.append('statement_id', statementId);
         if (params.toString()) url += '?' + params.toString();
         
@@ -102,31 +280,33 @@ async function loadDocuments() {
 
 async function uploadDocument(formData) {
     try {
-        console.log('Starting upload...');
-        console.log('FormData contents:');
-        for (let [key, value] of formData.entries()) {
-            console.log(`${key}:`, value);
-        }
+        const token = getAuthToken();
         
         const response = await fetch(`${API_BASE_URL}/upload-document/`, {
             method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`
+            },
             body: formData
         });
         
-        console.log('Response status:', response.status);
-        console.log('Response headers:', response.headers);
+        if (response.status === 401) {
+            clearAuthToken();
+            document.getElementById('app').classList.add('hidden');
+            document.getElementById('loginScreen').classList.remove('hidden');
+            showNotification('Session expired. Please login again.', 'warning');
+            throw new Error('Authentication expired');
+        }
         
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
-            console.error('Upload error response:', errorData);
             throw new Error(errorData.detail || `HTTP ${response.status}: ${response.statusText}`);
         }
         
         const result = await response.json();
-        console.log('Upload successful:', result);
         showNotification('Document uploaded successfully! Processing started in background.', 'success');
         hideUploadModal();
-        loadDocuments(); // Refresh the documents list
+        loadDocuments();
         return result;
     } catch (error) {
         console.error('Upload error:', error);
@@ -210,7 +390,8 @@ async function deleteTransaction(transactionId) {
     }
 }
 
-// UI Update Functions
+// ========== UI UPDATE FUNCTIONS ==========
+
 function updateDocumentsTable() {
     const tbody = document.getElementById('documentsTableBody');
     tbody.innerHTML = '';
@@ -218,7 +399,7 @@ function updateDocumentsTable() {
     if (documents.length === 0) {
         tbody.innerHTML = `
             <tr>
-                <td colspan="6" class="px-6 py-4 text-center text-gray-500">
+                <td colspan="5" class="px-6 py-4 text-center text-gray-500">
                     No documents found
                 </td>
             </tr>
@@ -244,7 +425,6 @@ function updateDocumentsTable() {
                     </div>
                 </div>
             </td>
-            <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${doc.user_id}</td>
             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">${doc.statement_id}</td>
             <td class="px-6 py-4 whitespace-nowrap">
                 ${getStatusBadge(status, doc.text_processing_completed)}
@@ -252,13 +432,13 @@ function updateDocumentsTable() {
             <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">${formatDate(doc.upload_date)}</td>
             <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                 <div class="flex space-x-2">
-                    <button onclick="viewDocument(${doc.id})" class="text-blue-600 hover:text-blue-900">
+                    <button onclick="viewDocument(${doc.id})" class="text-blue-600 hover:text-blue-900" title="View Details">
                         <i class="fas fa-eye"></i>
                     </button>
-                    <button onclick="viewTransactions('${doc.statement_id}')" class="text-green-600 hover:text-green-900">
+                    <button onclick="viewTransactions('${doc.statement_id}')" class="text-green-600 hover:text-green-900" title="View Transactions">
                         <i class="fas fa-exchange-alt"></i>
                     </button>
-                    <button onclick="deleteDocument(${doc.id})" class="text-red-600 hover:text-red-900">
+                    <button onclick="deleteDocument(${doc.id})" class="text-red-600 hover:text-red-900" title="Delete">
                         <i class="fas fa-trash"></i>
                     </button>
                 </div>
@@ -283,7 +463,8 @@ function updateDashboardStats() {
     document.getElementById('totalTransactions').textContent = totalTransactions;
 }
 
-// Modal Functions
+// ========== MODAL FUNCTIONS ==========
+
 function showUploadModal() {
     document.getElementById('uploadModal').classList.remove('hidden');
 }
@@ -309,7 +490,8 @@ function hideTransactionModal() {
     document.getElementById('transactionModal').classList.add('hidden');
 }
 
-// Document View Functions
+// ========== DOCUMENT VIEW FUNCTIONS ==========
+
 async function viewDocument(documentId) {
     try {
         const doc = documents.find(d => d.id === documentId);
@@ -336,7 +518,6 @@ async function viewDocument(documentId) {
                         <h4 class="font-semibold text-gray-900 mb-3">Document Information</h4>
                         <div class="space-y-2 text-sm">
                             <div><span class="font-medium">ID:</span> ${doc.id}</div>
-                            <div><span class="font-medium">User ID:</span> ${doc.user_id}</div>
                             <div><span class="font-medium">Statement ID:</span> ${doc.statement_id}</div>
                             <div><span class="font-medium">Filename:</span> ${doc.original_filename}</div>
                             <div><span class="font-medium">File Size:</span> ${formatFileSize(doc.file_size)}</div>
@@ -405,7 +586,8 @@ async function viewDocument(documentId) {
     }
 }
 
-// Transaction View Functions
+// ========== TRANSACTION VIEW FUNCTIONS ==========
+
 async function viewTransactions(statementId) {
     try {
         const [transactions, summary] = await Promise.all([
@@ -441,7 +623,7 @@ async function viewTransactions(statementId) {
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm">
                                         <span class="${t.amount && t.amount > 0 ? 'text-green-600' : 'text-red-600'}">
-                                            ${t.amount ? `$${Math.abs(parseFloat(t.amount)).toFixed(2)}` : '-'}
+                                            ${t.amount ? `${Math.abs(parseFloat(t.amount)).toFixed(2)}` : '-'}
                                         </span>
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -451,7 +633,7 @@ async function viewTransactions(statementId) {
                                         ${getStatusBadge(t.processing_completed ? 'success' : 'error', t.processing_completed)}
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                        <button onclick="deleteTransaction(${t.id})" class="text-red-600 hover:text-red-900">
+                                        <button onclick="deleteTransactionAndRefresh(${t.id}, '${statementId}')" class="text-red-600 hover:text-red-900">
                                             <i class="fas fa-trash"></i>
                                         </button>
                                     </td>
@@ -478,15 +660,15 @@ async function viewTransactions(statementId) {
                         <div class="text-sm text-blue-600">Total Transactions</div>
                     </div>
                     <div class="bg-green-50 p-4 rounded-lg">
-                        <div class="text-2xl font-bold text-green-600">$${summary.total_credits.toFixed(2)}</div>
+                        <div class="text-2xl font-bold text-green-600">${summary.total_credits.toFixed(2)}</div>
                         <div class="text-sm text-green-600">Total Credits</div>
                     </div>
                     <div class="bg-red-50 p-4 rounded-lg">
-                        <div class="text-2xl font-bold text-red-600">$${summary.total_debits.toFixed(2)}</div>
+                        <div class="text-2xl font-bold text-red-600">${summary.total_debits.toFixed(2)}</div>
                         <div class="text-sm text-red-600">Total Debits</div>
                     </div>
                     <div class="bg-purple-50 p-4 rounded-lg">
-                        <div class="text-2xl font-bold text-purple-600">$${summary.net_amount.toFixed(2)}</div>
+                        <div class="text-2xl font-bold text-purple-600">${summary.net_amount.toFixed(2)}</div>
                         <div class="text-sm text-purple-600">Net Amount</div>
                     </div>
                 </div>
@@ -514,6 +696,13 @@ async function viewTransactions(statementId) {
     }
 }
 
+async function deleteTransactionAndRefresh(transactionId, statementId) {
+    const success = await deleteTransaction(transactionId);
+    if (success) {
+        viewTransactions(statementId); // Refresh the view
+    }
+}
+
 async function deleteAllTransactions(statementId) {
     if (!confirm('Are you sure you want to delete all transactions for this statement?')) return;
     
@@ -526,22 +715,18 @@ async function deleteAllTransactions(statementId) {
     }
 }
 
-// Event Listeners
+// ========== EVENT LISTENERS ==========
+
 document.addEventListener('DOMContentLoaded', function() {
-    // Load initial data
-    loadDocuments();
+    // Check if user is already logged in
+    checkAuthOnLoad();
     
     // Upload form handler
     document.getElementById('uploadForm').addEventListener('submit', async function(e) {
         e.preventDefault();
         
-        console.log('Form submitted');
-        
-        const userId = document.getElementById('uploadUserId').value;
         const statementId = document.getElementById('uploadStatementId').value;
         const fileInput = document.getElementById('uploadFile');
-        
-        console.log('Form values:', { userId, statementId, fileSelected: fileInput.files.length > 0 });
         
         if (!fileInput.files[0]) {
             showNotification('Please select a PDF file', 'error');
@@ -549,7 +734,6 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         
         const formData = new FormData();
-        formData.append('user_id', userId);
         formData.append('statement_id', statementId);
         formData.append('pdf_file', fileInput.files[0]);
         
@@ -560,11 +744,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     
-    // Filter inputs - allow Enter key to trigger search
-    document.getElementById('userIdFilter').addEventListener('keypress', function(e) {
-        if (e.key === 'Enter') loadDocuments();
-    });
-    
+    // Filter input - allow Enter key to trigger search
     document.getElementById('statementIdFilter').addEventListener('keypress', function(e) {
         if (e.key === 'Enter') loadDocuments();
     });
@@ -585,7 +765,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Auto-refresh documents every 30 seconds to check for processing updates
 setInterval(() => {
-    if (documents.some(d => !d.text_processing_completed)) {
+    if (isAuthenticated() && documents.some(d => !d.text_processing_completed)) {
         loadDocuments();
     }
 }, 30000);

@@ -1,10 +1,44 @@
-from pydantic import BaseModel
-from datetime import datetime
 from typing import Optional, List
 from decimal import Decimal
+from pydantic import BaseModel, EmailStr, Field
+from datetime import datetime
+class UserCreate(BaseModel):
+    """Schema for user registration"""
+    email: EmailStr
+    password: str = Field(..., min_length=8, description="Password must be at least 8 characters")
+    full_name: Optional[str] = None
 
+
+class UserLogin(BaseModel):
+    """Schema for user login"""
+    email: EmailStr
+    password: str
+
+
+class UserResponse(BaseModel):
+    """Schema for user data in responses"""
+    id: int
+    email: str
+    full_name: Optional[str]
+    is_active: bool
+    created_at: datetime
+    
+    class Config:
+        from_attributes = True
+
+
+class Token(BaseModel):
+    """Schema for JWT token response"""
+    access_token: str
+    token_type: str
+
+
+class TokenData(BaseModel):
+    """Schema for data stored in JWT token"""
+    user_id: Optional[str] = None
+    
 class DocumentBase(BaseModel):
-    user_id: str
+    user_id: int
     statement_id: str
     original_filename: str
     stored_filename: str
@@ -17,7 +51,7 @@ class DocumentCreate(DocumentBase):
 
 class DocumentResponse(BaseModel):
     id: int
-    user_id: str
+    user_id: int
     statement_id: str
     original_filename: str
     file_size: int
